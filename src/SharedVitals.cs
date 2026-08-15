@@ -139,7 +139,8 @@ internal static class SharedVitals
             return 0;
 
         int[] current = creatures.Select(RawCurrentHp).ToArray();
-        int[] removal = AllocateProportionally(loss, current, creatures);
+        int receiverIndex = creatures.FindIndex(candidate => ReferenceEquals(candidate, receiver));
+        int[] removal = AllocateReceiverFirst(loss, current, receiverIndex);
         for (int i = 0; i < creatures.Count; i++)
             SetRawCurrentHpWithoutNotification(creatures[i], current[i] - removal[i]);
         NotifyCurrentHpChanges(creatures, current, includeUnchanged: true);
@@ -177,20 +178,23 @@ internal static class SharedVitals
         return heal - remaining;
     }
 
-    public static int DamageOstyContribution(Creature osty, int requestedLoss)
+    public static int DamageSharedOstyHp(Creature osty, int requestedLoss)
     {
         List<Creature> osties = Osties(osty);
-        int[] oldValues = osties.Select(RawCurrentHp).ToArray();
-        int ostyIndex = osties.FindIndex(candidate => ReferenceEquals(candidate, osty));
-        if (ostyIndex < 0)
+        if (osties.Count == 0 || requestedLoss <= 0)
             return 0;
 
-        int oldContribution = oldValues[ostyIndex];
-        int actual = Math.Clamp(requestedLoss, 0, oldContribution);
+        int[] oldValues = osties.Select(RawCurrentHp).ToArray();
+        int[] removal = AllocateProportionally(requestedLoss, oldValues, osties);
+        int actual = removal.Sum();
         if (actual == 0)
             return 0;
 
-        SetRawCurrentHpWithoutNotification(osty, oldContribution - actual);
+        // Raw Osty HP remains the owner's contribution ledger. Damage, however,
+        // belongs to the one shared pool, so distribute the loss across every
+        // contribution instead of exhausting only the Osty that was redirected to.
+        for (int i = 0; i < osties.Count; i++)
+            SetRawCurrentHpWithoutNotification(osties[i], oldValues[i] - removal[i]);
         NotifyCurrentHpChanges(osties, oldValues, includeUnchanged: true);
         return actual;
     }
@@ -261,6 +265,33 @@ internal static class SharedVitals
                 break;
         }
         return result;
+    }
+
+    public static int[] AllocateReceiverFirst(int total, IReadOnlyList<int> capacities, int receiverIndex)
+    {
+        var result = new int[capacities.Count];
+        if (total <= 0 || capacities.Count == 0)
+            return result;
+
+        long available = capacities.Sum(static value => (long)Math.Max(0, value));
+        int remaining = (int)Math.Min(total, available);
+        if (receiverIndex >= 0 && receiverIndex < capacities.Count)
+            remaining -= TakeFrom(receiverIndex, remaining);
+
+        for (int index = 0; index < capacities.Count && remaining > 0; index++)
+        {
+            if (index == receiverIndex)
+                continue;
+            remaining -= TakeFrom(index, remaining);
+        }
+        return result;
+
+        int TakeFrom(int index, int requested)
+        {
+            int taken = Math.Min(requested, Math.Max(0, capacities[index]));
+            result[index] = taken;
+            return taken;
+        }
     }
 
     private static void SetRawCurrentHpWithoutNotification(Creature creature, int value)

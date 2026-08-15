@@ -54,9 +54,9 @@ try
 
     Type uiPatches = typeof(HPShareMod).Assembly.GetType("HPShare.UiPatches", throwOnError: true)!;
     MethodInfo formatIntent = uiPatches.GetMethod("FormatIntentLabel", BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic)!;
-    string multiHit = (string)formatIntent.Invoke(null, ["2×4", 4, 8L])!;
-    string singleHit = (string)formatIntent.Invoke(null, ["28", 1, 28L])!;
-    if (multiHit != "2×4 (8)" || singleHit != "28" || multiHit.Contains('Σ') || singleHit.Contains('Σ'))
+    string multiHit = (string)formatIntent.Invoke(null, [3, 6L])!;
+    string singleHit = (string)formatIntent.Invoke(null, [1, 18L])!;
+    if (multiHit != "6x3 (18)" || singleHit != "18" || multiHit.Contains('Σ') || singleHit.Contains('Σ'))
         throw new InvalidOperationException($"Intent formatting mismatch: multi={multiHit}, single={singleHit}");
     Console.WriteLine("INTENT_FORMAT_OK");
 
@@ -70,7 +70,30 @@ try
     int[] capped = (int[])allocate.Invoke(null, new object?[] { 7, new[] { 1, 2, 3 }, null })!;
     if (!capped.SequenceEqual(new[] { 1, 2, 3 }))
         throw new InvalidOperationException("Allocation exceeded contribution capacity.");
+    int[] ostyPartial = (int[])allocate.Invoke(null, new object?[] { 4, new[] { 2, 7 }, null })!;
+    int[] ostyLethal = (int[])allocate.Invoke(null, new object?[] { 12, new[] { 2, 7 }, null })!;
+    if (!ostyPartial.SequenceEqual(new[] { 1, 3 })
+        || !ostyLethal.SequenceEqual(new[] { 2, 7 })
+        || ostyLethal.Sum() != 9
+        || 12 - ostyLethal.Sum() != 3)
+    {
+        throw new InvalidOperationException(
+            $"Shared Osty damage mismatch: partial=[{string.Join(',', ostyPartial)}], lethal=[{string.Join(',', ostyLethal)}]");
+    }
     Console.WriteLine("ALLOCATION_TEST_OK");
+
+    MethodInfo allocateReceiverFirst = sharedVitals.GetMethod("AllocateReceiverFirst", BindingFlags.Public | BindingFlags.Static)!;
+    int[] firstReceiver = (int[])allocateReceiverFirst.Invoke(null, [9, new[] { 66, 66 }, 0])!;
+    int[] secondReceiver = (int[])allocateReceiverFirst.Invoke(null, [9, new[] { 57, 66 }, 1])!;
+    int[] overflow = (int[])allocateReceiverFirst.Invoke(null, [5, new[] { 3, 10 }, 0])!;
+    if (!firstReceiver.SequenceEqual(new[] { 9, 0 })
+        || !secondReceiver.SequenceEqual(new[] { 0, 9 })
+        || !overflow.SequenceEqual(new[] { 3, 2 }))
+    {
+        throw new InvalidOperationException(
+            $"Receiver-first allocation mismatch: first=[{string.Join(',', firstReceiver)}], second=[{string.Join(',', secondReceiver)}], overflow=[{string.Join(',', overflow)}]");
+    }
+    Console.WriteLine("RECEIVER_FIRST_DAMAGE_TEST_OK");
 
     var random = new Random(0x485053);
     for (int iteration = 0; iteration < 10_000; iteration++)
@@ -89,6 +112,26 @@ try
         }
     }
     Console.WriteLine("ALLOCATION_FUZZ_OK");
+
+    for (int iteration = 0; iteration < 10_000; iteration++)
+    {
+        int[] capacities = Enumerable.Range(0, random.Next(1, 7))
+            .Select(_ => random.Next(0, 10_000))
+            .ToArray();
+        int receiverIndex = random.Next(capacities.Length);
+        int requested = random.Next(0, 60_000);
+        int[] allocation = (int[])allocateReceiverFirst.Invoke(null, [requested, capacities, receiverIndex])!;
+        int expected = Math.Min(requested, capacities.Sum());
+        int expectedReceiver = Math.Min(expected, capacities[receiverIndex]);
+        if (allocation.Sum() != expected
+            || allocation[receiverIndex] != expectedReceiver
+            || allocation.Where((value, index) => value < 0 || value > capacities[index]).Any())
+        {
+            throw new InvalidOperationException(
+                $"Receiver-first invariant failed: requested={requested}, receiver={receiverIndex}, capacities=[{string.Join(',', capacities)}], result=[{string.Join(',', allocation)}]");
+        }
+    }
+    Console.WriteLine("RECEIVER_FIRST_DAMAGE_FUZZ_OK");
 
     string[] describedCards =
     [

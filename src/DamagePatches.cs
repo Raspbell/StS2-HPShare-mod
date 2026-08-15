@@ -135,10 +135,9 @@ internal static class DamagePatches
         if (SharedVitals.IsOsty(__instance) && SharedVitals.TryGetParty(__instance, out _))
         {
             int oldShared = SharedVitals.SharedCurrentHp(__instance);
-            int oldContribution = SharedVitals.RawCurrentHp(__instance);
-            int actual = SharedVitals.DamageOstyContribution(__instance, requested);
+            int actual = SharedVitals.DamageSharedOstyHp(__instance, requested);
             bool killed = oldShared > 0 && SharedVitals.SharedCurrentHp(__instance) <= 0;
-            __result = NewDamageResult(__instance, props, actual, killed, killed ? Math.Max(0, requested - oldContribution) : 0);
+            __result = NewDamageResult(__instance, props, actual, killed, killed ? Math.Max(0, requested - oldShared) : 0);
             return false;
         }
 

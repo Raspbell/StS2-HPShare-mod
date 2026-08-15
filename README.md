@@ -12,8 +12,8 @@ Target game build: `v0.111.0` (2026-08-13).
 - Block granted to another player is credited to that recipient.
 - Effects referring to “your Block” use only that player's Block contribution.
 - Percentage healing uses the shared maximum HP; fixed healing is unchanged.
-- Osty's visible HP is shared, while Osty card effects use the owner's contribution.
-- Enemy attack damage is multiplied by the configurable coefficient (default `1.10`). An all-player attack therefore naturally deals roughly `players × 1.10` of its single-player total.
+- Osty's visible HP is shared, while Osty card effects use the owner's contribution. Damage is removed proportionally from all Osty contributions, and only damage beyond the entire shared Osty pool spills into shared player HP.
+- Enemy attack damage is multiplied by the configurable coefficient (default `1.10`). An all-player attack therefore naturally deals roughly `players x 1.10` of its single-player total. Multi-hit intents are displayed as `damage x hits (total)`.
 
 The contribution labels beside Block and Osty HP have localized Japanese/English hover explanations. The multiplayer roster keeps character/name/hand/energy UI but hides its redundant HP/Block strip.
 

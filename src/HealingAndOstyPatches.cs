@@ -135,7 +135,12 @@ internal static class OstyPatches
     private static void DieForYouPostfix(DieForYouPower __instance, Creature target, ref Creature __result)
     {
         Creature osty = __instance.Owner;
-        if (ReferenceEquals(__result, osty) && SharedVitals.RawCurrentHp(osty) <= 0)
+        if (!SharedVitals.TryGetParty(osty, out _))
+            return;
+
+        // A zero personal contribution does not mean that this physical Osty is
+        // dead. Keep redirecting until the shared Osty pool as a whole is empty.
+        if (ReferenceEquals(__result, osty) && !SharedVitals.SharedOstyAlive(osty))
             __result = target;
     }
 }

@@ -50,7 +50,7 @@ internal static class SettingsMenu
 
             var valueLabel = new Label
             {
-                Text = $"×{ModConfig.EnemyAttackCoefficient:0.00}",
+                Text = $"x{ModConfig.EnemyAttackCoefficient:0.00}",
                 CustomMinimumSize = new Vector2(72f, 42f),
                 HorizontalAlignment = HorizontalAlignment.Center,
                 VerticalAlignment = VerticalAlignment.Center,
@@ -71,7 +71,7 @@ internal static class SettingsMenu
             {
                 decimal coefficient = Math.Round((decimal)value, 2, MidpointRounding.AwayFromZero);
                 ModConfig.SetEnemyAttackCoefficient(coefficient);
-                valueLabel.Text = $"×{ModConfig.EnemyAttackCoefficient:0.00}";
+                valueLabel.Text = $"x{ModConfig.EnemyAttackCoefficient:0.00}";
             };
 
             row.AddChild(title);

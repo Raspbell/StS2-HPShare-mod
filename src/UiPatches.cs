@@ -212,25 +212,24 @@ internal static class UiPatches
             || IntentTargetsField.GetValue(__instance) is not IEnumerable<Creature> targetEnumerable)
             return;
 
-        List<Creature> targets = targetEnumerable.Where(SharedVitals.IsSharedPlayer).ToList();
-        if (targets.Count == 0)
+        List<Creature> targets = targetEnumerable.ToList();
+        if (!targets.Any(SharedVitals.IsSharedPlayer))
             return;
 
-        var breakdown = new List<(Creature Target, int Damage)>();
-        foreach (Creature target in targets)
-        {
-            int damage = attack.GetTotalDamage(new[] { target }, owner);
-            breakdown.Add((target, damage));
-        }
-        long total = breakdown.Sum(item => (long)item.Damage);
+        // AttackIntent resolves its preview against the local player. Calling it
+        // once for every target repeats that same preview and makes an all-player
+        // intent look multiplied by the party size. Derive the total from exactly
+        // one finalized per-hit value so the label can never disagree with itself.
+        long perHit = attack.GetSingleDamage(targets, owner);
+        int repeats = Math.Max(1, attack.Repeats);
+        long total = SaturatingMultiply(perHit, repeats);
 
         if (IntentValueLabelField.GetValue(__instance) is MegaRichTextLabel label)
-            label.Text = FormatIntentLabel(label.Text, attack.Repeats, total);
+            label.Text = FormatIntentLabel(repeats, perHit);
 
-        string details = string.Join("\n", breakdown.Select(item => $"{item.Target.Name}: {item.Damage}"));
         string hpShareTooltip = IsJapanese()
-            ? $"共有HPへの合計予定ダメージ: {total}\n{details}"
-            : $"Total projected damage to shared HP: {total}\n{details}";
+            ? $"予定ダメージ: {total}"
+            : $"Projected damage: {total}";
         __instance.TooltipText = string.IsNullOrWhiteSpace(baseTooltip)
             ? hpShareTooltip
             : $"{baseTooltip}\n{hpShareTooltip}";
@@ -254,8 +253,19 @@ internal static class UiPatches
     internal static bool IsJapanese()
         => LocManager.Instance?.Language is "jpn" or "ja";
 
-    internal static string FormatIntentLabel(string vanillaLabel, int repeats, long sharedTotal)
-        => repeats > 1 ? $"{vanillaLabel} ({sharedTotal})" : sharedTotal.ToString();
+    internal static string FormatIntentLabel(int repeats, long perHit)
+    {
+        int hitCount = Math.Max(1, repeats);
+        long total = SaturatingMultiply(perHit, hitCount);
+        return hitCount > 1 ? $"{perHit}x{hitCount} ({total})" : total.ToString();
+    }
+
+    private static long SaturatingMultiply(long value, int multiplier)
+    {
+        if (value <= 0 || multiplier <= 0)
+            return 0;
+        return value > long.MaxValue / multiplier ? long.MaxValue : value * multiplier;
+    }
 
     private sealed class IntentTooltipState
     {
