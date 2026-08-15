@@ -1,0 +1,7 @@
+.appdata/
+bin/
+obj/
+Smoke/bin/
+Smoke/obj/
+dist/
+hpshare.settings.json

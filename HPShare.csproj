@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>HPShare</AssemblyName>
+    <RootNamespace>HPShare</RootNamespace>
+    <Deterministic>true</Deterministic>
+    <DebugType>portable</DebugType>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+    <GameDir Condition="'$(GameDir)' == ''">D:\SteamLibrary\steamapps\common\Slay the Spire 2\data_sts2_windows_x86_64</GameDir>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Remove="Smoke\**\*.cs" />
+    <Reference Include="sts2" HintPath="$(GameDir)\sts2.dll" Private="false" />
+    <Reference Include="0Harmony" HintPath="$(GameDir)\0Harmony.dll" Private="false" />
+    <Reference Include="GodotSharp" HintPath="$(GameDir)\GodotSharp.dll" Private="false" />
+  </ItemGroup>
+
+  <Target Name="CopyModFiles" AfterTargets="Build">
+    <Copy SourceFiles="HPShare.json" DestinationFolder="$(OutputPath)" />
+  </Target>
+
+  <Target Name="StageInstallableMod" AfterTargets="Build">
+    <MakeDir Directories="$(MSBuildProjectDirectory)\dist\HPShare" />
+    <Copy SourceFiles="$(TargetPath);$(MSBuildProjectDirectory)\HPShare.json"
+          DestinationFolder="$(MSBuildProjectDirectory)\dist\HPShare" />
+  </Target>
+</Project>
