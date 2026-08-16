@@ -1,0 +1,11 @@
+{
+  "id": "shareeverything",
+  "name": "Share Everything",
+  "author": "kyosh",
+  "description": "Adds optional multiplayer sharing for HP, Block, buffs, debuffs, gold, decks, energy, relics, and potions.",
+  "version": "0.3.9",
+  "has_pck": false,
+  "has_dll": true,
+  "dependencies": [],
+  "affects_gameplay": true
+}

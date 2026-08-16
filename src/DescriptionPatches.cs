@@ -50,19 +50,19 @@ internal static class DescriptionPatches
         var notes = new List<string>();
         bool japanese = UiPatches.IsJapanese();
 
-        if (BlockReferenceCards.Contains(typeName))
+        if (ModConfig.ShareBlock && BlockReferenceCards.Contains(typeName))
         {
             notes.Add(japanese
                 ? "「あなたのブロック」を参照する効果は、自分が共有ブロックへ加えた貢献量だけを参照します。"
                 : "Effects that refer to your Block use only your contribution to shared Block.");
         }
-        if (BlockRetentionCards.Contains(typeName))
+        if (ModConfig.ShareBlock && BlockRetentionCards.Contains(typeName))
         {
             notes.Add(japanese
                 ? "ブロックを維持する効果は、自分の共有ブロックへの貢献分だけに適用されます。"
                 : "Block retention applies only to your contribution to shared Block.");
         }
-        if (OstyCards.Contains(typeName))
+        if (ModConfig.ShareHp && OstyCards.Contains(typeName))
         {
             notes.Add(japanese
                 ? "オスティのHP・最大HPを参照／変更する効果は、自分が共有オスティへ加えた貢献分だけを使用します。"
@@ -110,11 +110,11 @@ internal static class DescriptionPatches
             return 0;
         string typeName = card.GetType().Name;
         int count = 0;
-        if (BlockReferenceCards.Contains(typeName))
+        if (ModConfig.ShareBlock && BlockReferenceCards.Contains(typeName))
             count++;
-        if (BlockRetentionCards.Contains(typeName))
+        if (ModConfig.ShareBlock && BlockRetentionCards.Contains(typeName))
             count++;
-        if (OstyCards.Contains(typeName))
+        if (ModConfig.ShareHp && OstyCards.Contains(typeName))
             count++;
         return count;
     }

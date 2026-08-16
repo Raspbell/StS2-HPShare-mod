@@ -7,6 +7,7 @@ using MegaCrit.Sts2.Core.Entities.Creatures;
 using MegaCrit.Sts2.Core.Hooks;
 using MegaCrit.Sts2.Core.Localization.DynamicVars;
 using MegaCrit.Sts2.Core.Models;
+using MegaCrit.Sts2.Core.Nodes.Vfx;
 using MegaCrit.Sts2.Core.Runs;
 using MegaCrit.Sts2.Core.ValueProps;
 
@@ -38,6 +39,10 @@ internal static class DamagePatches
         harmony.Patch(terminalDamage,
             prefix: new HarmonyMethod(typeof(DamagePatches), nameof(DamageBatchPrefix)),
             postfix: new HarmonyMethod(typeof(DamagePatches), nameof(DamageBatchPostfix)));
+
+        harmony.Patch(AccessTools.Method(typeof(NDamageNumVfx), nameof(NDamageNumVfx.Create),
+            [typeof(Creature), typeof(DamageResult)]),
+            prefix: new HarmonyMethod(typeof(DamagePatches), nameof(DamageNumberPrefix)));
     }
 
     private static void ModifyDamagePostfix(Creature? target, Creature? dealer, ref decimal __result)
@@ -47,7 +52,7 @@ internal static class DamagePatches
         // multiplayer combat turn loop.
         if (target is null || dealer?.IsMonster != true)
             return;
-        if (target.IsPlayer && SharedVitals.IsSharedPlayer(target))
+        if (target.IsPlayer && SharedVitals.IsPartyPlayer(target))
             __result *= ModConfig.EnemyAttackCoefficient;
     }
 
@@ -62,10 +67,20 @@ internal static class DamagePatches
     {
         __state = CurrentBatch.Value;
         List<Creature> targetList = targets.ToList();
-        List<Creature> playerTargets = targetList.Where(SharedVitals.IsSharedPlayer).ToList();
-        if (playerTargets.Count == 0 || props.HasFlag(ValueProp.Unblockable))
+        List<Creature> playerTargets = targetList
+            .Where(target => SharedVitals.IsSharedHpPlayer(target) || SharedVitals.IsSharedBlockPlayer(target))
+            .ToList();
+        if (playerTargets.Count == 0)
         {
             CurrentBatch.Value = null;
+            return;
+        }
+
+        if (props.HasFlag(ValueProp.Unblockable))
+        {
+            CurrentBatch.Value = new DamageBatch(
+                playerTargets.Select(target => (Target: target, Damage: 0)).ToList(),
+                playerTargets.Any(SharedVitals.IsSharedHpPlayer));
             return;
         }
 
@@ -90,21 +105,92 @@ internal static class DamagePatches
                     out modifiers);
                 damages.Add((target, ToDamageInt(modified)));
             }
-            CurrentBatch.Value = new DamageBatch(damages);
+            CurrentBatch.Value = new DamageBatch(damages, playerTargets.Any(SharedVitals.IsSharedHpPlayer));
         }
         catch (Exception ex)
         {
             CurrentBatch.Value = null;
-            Godot.GD.PrintErr($"[HPShare] Could not precompute shared Block allocation; using safe sequential pooling: {ex.Message}");
+            Godot.GD.PrintErr($"[ShareEverything] Could not precompute shared Block allocation; using safe sequential pooling: {ex.Message}");
         }
     }
 
-    private static void DamageBatchPostfix(DamageBatch? __state)
-        => CurrentBatch.Value = __state;
+    private static void DamageBatchPostfix(
+        ref Task<IEnumerable<DamageResult>> __result,
+        DamageBatch? __state)
+    {
+        DamageBatch? completedBatch = CurrentBatch.Value;
+        CurrentBatch.Value = __state;
+        if (completedBatch?.ShouldCombineDamageNumbers == true)
+            __result = ShowCombinedDamageNumberAfterCompletion(__result);
+    }
+
+    private static bool DamageNumberPrefix(
+        Creature target,
+        ref NDamageNumVfx __result)
+    {
+        if (CurrentBatch.Value?.ShouldCombineDamageNumbers != true
+            || !IsSharedDamageReceiver(target))
+        {
+            return true;
+        }
+
+        // CreatureCmd safely accepts a null VFX. The original DamageResult remains
+        // untouched and is aggregated only after the whole target batch completes.
+        __result = null!;
+        return false;
+    }
+
+    private static async Task<IEnumerable<DamageResult>> ShowCombinedDamageNumberAfterCompletion(
+        Task<IEnumerable<DamageResult>> pendingResults)
+    {
+        List<DamageResult> results = (await pendingResults).ToList();
+        try
+        {
+            List<DamageResult> ostyResults = results
+                .Where(result => IsSharedOsty(result.Receiver))
+                .ToList();
+            List<DamageResult> playerResults = results
+                .Where(result => SharedVitals.IsSharedHpPlayer(result.Receiver))
+                .ToList();
+
+            // Osty and the player party are separate shared HP pools. Preserve
+            // every individual result, but render one aggregate for each pool.
+            ShowCombinedDamageNumber(ostyResults);
+            ShowCombinedDamageNumber(playerResults);
+        }
+        catch (Exception ex)
+        {
+            Godot.GD.PrintErr($"[ShareEverything] Could not display combined shared damage number: {ex.Message}");
+        }
+        return results;
+    }
+
+    private static void ShowCombinedDamageNumber(IReadOnlyList<DamageResult> results)
+    {
+        if (results.Count == 0)
+            return;
+
+        long totalLoss = results.Sum(result => (long)Math.Max(0, result.UnblockedDamage));
+        if (totalLoss <= 0)
+            return;
+
+        Creature anchor = results[0].Receiver;
+        int displayedLoss = (int)Math.Min(999_999_999L, totalLoss);
+        NDamageNumVfx? vfx = NDamageNumVfx.Create(anchor, displayedLoss, true);
+        if (vfx is not null)
+            anchor.GetVfxContainer()?.AddChild(vfx);
+    }
+
+    private static bool IsSharedDamageReceiver(Creature creature)
+        => SharedVitals.IsSharedHpPlayer(creature)
+            || IsSharedOsty(creature);
+
+    private static bool IsSharedOsty(Creature creature)
+        => SharedVitals.IsSharedOsty(creature);
 
     private static bool DamageBlockPrefix(Creature __instance, decimal amount, ValueProp props, ref decimal __result)
     {
-        if (!SharedVitals.IsSharedPlayer(__instance))
+        if (!SharedVitals.IsSharedBlockPlayer(__instance))
             return true;
         if (props.HasFlag(ValueProp.Unblockable))
         {
@@ -122,7 +208,7 @@ internal static class DamagePatches
     private static bool LoseHpPrefix(Creature __instance, decimal amount, ValueProp props, ref DamageResult __result)
     {
         int requested = ToDamageInt(amount);
-        if (SharedVitals.IsSharedPlayer(__instance))
+        if (SharedVitals.IsSharedHpPlayer(__instance))
         {
             int oldTotal = SharedVitals.SharedCurrentHp(__instance);
             int actual = SharedVitals.LoseSharedPlayerHp(__instance, requested);
@@ -132,7 +218,7 @@ internal static class DamagePatches
             return false;
         }
 
-        if (SharedVitals.IsOsty(__instance) && SharedVitals.TryGetParty(__instance, out _))
+        if (SharedVitals.IsSharedOsty(__instance))
         {
             int oldShared = SharedVitals.SharedCurrentHp(__instance);
             int actual = SharedVitals.DamageSharedOstyHp(__instance, requested);
@@ -158,10 +244,20 @@ internal static class DamagePatches
     private sealed class DamageBatch
     {
         private readonly List<(Creature Target, int Damage)> _damage;
+        private readonly bool _combineDamageNumbers;
         private Dictionary<Creature, Queue<int>>? _blockAllocation;
 
-        public DamageBatch(List<(Creature Target, int Damage)> damage)
-            => _damage = damage;
+        public DamageBatch(List<(Creature Target, int Damage)> damage, bool combineDamageNumbers)
+        {
+            _damage = damage;
+            _combineDamageNumbers = combineDamageNumbers;
+        }
+
+        public bool ShouldCombineDamageNumbers
+            => _combineDamageNumbers && _damage.Select(item => item.Target)
+                .Distinct(ReferenceEqualityComparer.Instance)
+                .Skip(1)
+                .Any();
 
         public int TakeBlockFor(Creature target, int actualIncoming)
         {

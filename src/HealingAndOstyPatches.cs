@@ -5,10 +5,12 @@ using MegaCrit.Sts2.Core.Commands;
 using MegaCrit.Sts2.Core.Entities.Creatures;
 using MegaCrit.Sts2.Core.Entities.Players;
 using MegaCrit.Sts2.Core.Entities.RestSite;
+using MegaCrit.Sts2.Core.Hooks;
 using MegaCrit.Sts2.Core.Models;
 using MegaCrit.Sts2.Core.Models.Potions;
 using MegaCrit.Sts2.Core.Models.Relics;
 using MegaCrit.Sts2.Core.Models.Powers;
+using MegaCrit.Sts2.Core.ValueProps;
 
 namespace HPShare;
 
@@ -59,7 +61,7 @@ internal static class HealingPatches
         MethodInfo? moveNext = stateMachine is null ? null : AccessTools.Method(stateMachine, "MoveNext");
         if (moveNext is null)
         {
-            Godot.GD.PrintErr($"[HPShare] Percentage-heal patch target not found: {declaringType.FullName}.{methodName}");
+            Godot.GD.PrintErr($"[ShareEverything] Percentage-heal patch target not found: {declaringType.FullName}.{methodName}");
             return;
         }
 
@@ -122,25 +124,40 @@ internal static class OstyPatches
             postfix: new HarmonyMethod(typeof(OstyPatches), nameof(IsAlivePostfix)));
         harmony.Patch(AccessTools.Method(typeof(DieForYouPower), nameof(DieForYouPower.ModifyUnblockedDamageTarget)),
             postfix: new HarmonyMethod(typeof(OstyPatches), nameof(DieForYouPostfix)));
+        harmony.Patch(AccessTools.Method(typeof(Hook), nameof(Hook.ModifyUnblockedDamageTarget)),
+            postfix: new HarmonyMethod(typeof(OstyPatches), nameof(SharedOstyTargetPostfix)));
     }
 
     private static void IsAlivePostfix(Creature __instance, ref bool __result)
     {
         if (SharedVitals.IsSharedPlayer(__instance))
             __result = SharedVitals.SharedCurrentHp(__instance) > 0;
-        else if (SharedVitals.IsOsty(__instance) && SharedVitals.TryGetParty(__instance, out _))
+        else if (SharedVitals.IsSharedOsty(__instance))
             __result = SharedVitals.SharedCurrentHp(__instance) > 0;
     }
 
     private static void DieForYouPostfix(DieForYouPower __instance, Creature target, ref Creature __result)
     {
         Creature osty = __instance.Owner;
-        if (!SharedVitals.TryGetParty(osty, out _))
+        if (!SharedVitals.IsSharedOsty(osty))
             return;
 
         // A zero personal contribution does not mean that this physical Osty is
         // dead. Keep redirecting until the shared Osty pool as a whole is empty.
         if (ReferenceEquals(__result, osty) && !SharedVitals.SharedOstyAlive(osty))
             __result = target;
+    }
+
+    private static void SharedOstyTargetPostfix(ValueProp props, ref Creature __result)
+    {
+        // Match vanilla DieForYou: HP-loss costs and non-powered damage are not
+        // redirected. Apply this after every listener so Tank/Bodyguard-style
+        // target changes resolve before choosing the party's shared Osty.
+        if (!props.IsPoweredAttack() || !SharedVitals.IsSharedPlayer(__result))
+            return;
+
+        Creature? osty = SharedVitals.GetSharedOstyDamageReceiver(__result);
+        if (osty is not null)
+            __result = osty;
     }
 }

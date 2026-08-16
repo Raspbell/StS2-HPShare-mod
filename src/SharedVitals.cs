@@ -28,7 +28,7 @@ internal static class SharedVitals
         if (player?.RunState is null)
             return false;
 
-        players = player.RunState.Players;
+        players = player.RunState.Players.OrderBy(candidate => candidate.NetId).ToList();
         return players.Count > 1;
     }
 
@@ -36,7 +36,16 @@ internal static class SharedVitals
         => creature.Player is not null && TryGetParty(creature, out _);
 
     public static bool IsSharedPlayer(Creature creature)
-        => IsPartyPlayer(creature) && IsPartyVitalsReady(creature);
+        => IsSharedHpPlayer(creature);
+
+    public static bool IsSharedHpPlayer(Creature creature)
+        => ModConfig.ShareHp && IsPartyPlayer(creature) && IsPartyVitalsReady(creature);
+
+    public static bool IsSharedBlockPlayer(Creature creature)
+        => ModConfig.ShareBlock && IsPartyPlayer(creature) && IsPartyVitalsReady(creature);
+
+    public static bool IsSharedOsty(Creature creature)
+        => ModConfig.ShareHp && IsOsty(creature) && TryGetParty(creature, out _);
 
     public static bool IsPartyVitalsReady(Creature creature)
     {
@@ -128,7 +137,32 @@ internal static class SharedVitals
         => SaturatingSum(PlayerCreatures(creature), RawBlock);
 
     public static bool SharedOstyAlive(Creature creature)
-        => IsOsty(creature) && SharedCurrentHp(creature) > 0;
+        => IsSharedOsty(creature) && SharedCurrentHp(creature) > 0;
+
+    public static Creature? GetSharedOstyDamageReceiver(Creature playerTarget)
+    {
+        if (!IsSharedHpPlayer(playerTarget))
+            return null;
+
+        List<Creature> osties = Osties(playerTarget);
+        if (osties.Count == 0 || SaturatingSum(osties, RawCurrentHp) <= 0)
+            return null;
+
+        // Prefer the final target's own Osty when one exists. For a player without
+        // an Osty, use a deterministic party Osty; all of them drain the same pool.
+        try
+        {
+            Creature? ownedOsty = playerTarget.Player?.Osty;
+            if (ownedOsty is not null && osties.Any(candidate => ReferenceEquals(candidate, ownedOsty)))
+                return ownedOsty;
+        }
+        catch
+        {
+            // Characters without an Osty can throw while resolving Player.Osty.
+        }
+
+        return osties.OrderBy(GetStableId).First();
+    }
 
     public static int LoseSharedPlayerHp(Creature receiver, int requestedLoss)
     {
@@ -429,7 +463,7 @@ internal static class SharedVitalsPatches
 
     private static void HpPercentPostfix(Creature __instance, ref double __result)
     {
-        if (!SharedVitals.IsSharedPlayer(__instance))
+        if (!SharedVitals.IsSharedHpPlayer(__instance))
             return;
         int maximum = SharedVitals.SharedMaxHp(__instance);
         __result = maximum <= 0 ? 0d : (double)SharedVitals.SharedCurrentHp(__instance) / maximum;
@@ -437,7 +471,7 @@ internal static class SharedVitalsPatches
 
     private static bool HealInternalPrefix(Creature __instance, decimal amount)
     {
-        if (!SharedVitals.IsSharedPlayer(__instance))
+        if (!SharedVitals.IsSharedHpPlayer(__instance))
             return true;
         SharedVitals.HealSharedPlayerHp(__instance, DecimalToNonNegativeInt(amount));
         return false;
@@ -445,23 +479,23 @@ internal static class SharedVitalsPatches
 
     private static void BlockSetterPostfix(Creature __instance)
     {
-        if (SharedVitals.IsSharedPlayer(__instance))
+        if (SharedVitals.IsSharedBlockPlayer(__instance))
             SharedVitals.NotifyOtherBlockViews(__instance);
     }
 
     private static void CurrentHpSetterPostfix(Creature __instance)
     {
-        if (SharedVitals.IsSharedPlayer(__instance))
+        if (SharedVitals.IsSharedHpPlayer(__instance))
             SharedVitals.NotifyOtherPlayerHpViews(__instance, maximumChanged: false);
-        else if (SharedVitals.IsOsty(__instance) && SharedVitals.TryGetParty(__instance, out _))
+        else if (SharedVitals.IsSharedOsty(__instance))
             SharedVitals.NotifyOtherOstyHpViews(__instance, maximumChanged: false);
     }
 
     private static void MaxHpSetterPostfix(Creature __instance)
     {
-        if (SharedVitals.IsSharedPlayer(__instance))
+        if (SharedVitals.IsSharedHpPlayer(__instance))
             SharedVitals.NotifyOtherPlayerHpViews(__instance, maximumChanged: true);
-        else if (SharedVitals.IsOsty(__instance) && SharedVitals.TryGetParty(__instance, out _))
+        else if (SharedVitals.IsSharedOsty(__instance))
             SharedVitals.NotifyOtherOstyHpViews(__instance, maximumChanged: true);
     }
 

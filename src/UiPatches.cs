@@ -2,11 +2,16 @@ using System.Reflection;
 using System.Runtime.CompilerServices;
 using Godot;
 using HarmonyLib;
+using MegaCrit.Sts2.Core.Entities.Cards;
 using MegaCrit.Sts2.Core.Entities.Creatures;
+using MegaCrit.Sts2.Core.Hooks;
 using MegaCrit.Sts2.Core.Localization;
+using MegaCrit.Sts2.Core.Models;
 using MegaCrit.Sts2.Core.MonsterMoves.Intents;
 using MegaCrit.Sts2.Core.Nodes.Combat;
 using MegaCrit.Sts2.Core.Nodes.Multiplayer;
+using MegaCrit.Sts2.Core.Runs;
+using MegaCrit.Sts2.Core.ValueProps;
 using MegaCrit.Sts2.addons.mega_text;
 using MegaCrit.sts2.Core.Nodes.TopBar;
 
@@ -94,8 +99,8 @@ internal static class UiPatches
     private static int GetDisplayedCurrentHp(Creature creature)
     {
         MarkPartyReadyForDisplay(creature);
-        return SharedVitals.IsSharedPlayer(creature)
-            || SharedVitals.IsOsty(creature) && SharedVitals.TryGetParty(creature, out _)
+        return SharedVitals.IsSharedHpPlayer(creature)
+            || SharedVitals.IsSharedOsty(creature)
                 ? SharedVitals.SharedCurrentHp(creature)
                 : SharedVitals.RawCurrentHp(creature);
     }
@@ -103,8 +108,8 @@ internal static class UiPatches
     private static int GetDisplayedMaxHp(Creature creature)
     {
         MarkPartyReadyForDisplay(creature);
-        return SharedVitals.IsSharedPlayer(creature)
-            || SharedVitals.IsOsty(creature) && SharedVitals.TryGetParty(creature, out _)
+        return SharedVitals.IsSharedHpPlayer(creature)
+            || SharedVitals.IsSharedOsty(creature)
                 ? SharedVitals.SharedMaxHp(creature)
                 : SharedVitals.RawMaxHp(creature);
     }
@@ -112,7 +117,7 @@ internal static class UiPatches
     private static int GetDisplayedBlock(Creature creature)
     {
         MarkPartyReadyForDisplay(creature);
-        return SharedVitals.IsSharedPlayer(creature)
+        return SharedVitals.IsSharedBlockPlayer(creature)
             ? SharedVitals.SharedBlock(creature)
             : SharedVitals.RawBlock(creature);
     }
@@ -131,9 +136,15 @@ internal static class UiPatches
 
     private static void UpdateContributionLabel(NHealthBar healthBar, Creature creature)
     {
-        bool isPlayer = SharedVitals.IsSharedPlayer(creature);
-        bool isOsty = SharedVitals.IsOsty(creature) && SharedVitals.TryGetParty(creature, out _);
-        Label? label = healthBar.GetNodeOrNull<Label>(ContributionNodeName);
+        bool isPlayer = SharedVitals.IsSharedBlockPlayer(creature);
+        bool isOsty = SharedVitals.IsSharedOsty(creature);
+        // The player contribution label is reparented under the Block container.
+        // Search recursively so RefreshValues reuses it instead of creating a new
+        // overlapping label on every refresh.
+        Label? label = healthBar.FindChild(
+            ContributionNodeName,
+            recursive: true,
+            owned: false) as Label;
         if (!isPlayer && !isOsty)
         {
             if (label is not null)
@@ -161,9 +172,9 @@ internal static class UiPatches
         bool japanese = IsJapanese();
         if (isOsty)
         {
-            int hpFontSize = 18;
-            if (HealthBarHpLabel.GetValue(healthBar) is Control hpText)
-                hpFontSize = Math.Max(1, hpText.GetThemeFontSize("font_size"));
+            if (!ReferenceEquals(label.GetParent(), healthBar))
+                label.Reparent(healthBar, keepGlobalTransform: false);
+            int hpFontSize = GetHpFontSize(healthBar);
             label.AddThemeFontSizeOverride("font_size", hpFontSize);
             label.HorizontalAlignment = HorizontalAlignment.Center;
             label.Text = $"◆ {SharedVitals.RawCurrentHp(creature)}/{SharedVitals.RawMaxHp(creature)}";
@@ -179,7 +190,8 @@ internal static class UiPatches
             return;
         }
 
-        label.AddThemeFontSizeOverride("font_size", 13);
+        int blockContributionFontSize = GetHpFontSize(healthBar);
+        label.AddThemeFontSizeOverride("font_size", blockContributionFontSize);
         label.HorizontalAlignment = HorizontalAlignment.Right;
         int ownBlock = SharedVitals.RawBlock(creature);
         int sharedBlock = SharedVitals.SharedBlock(creature);
@@ -188,15 +200,34 @@ internal static class UiPatches
             ? "このプレイヤーが共有ブロックへ加えた貢献量です。「あなたのブロック」を参照する効果は、この値だけを参照します。"
             : "This player's contribution to shared Block. Effects that refer to your Block use only this value.";
         Control? block = BlockContainer.GetValue(healthBar) as Control;
-        label.Position = (block?.Position ?? Vector2.Zero) + new Vector2(-68f, -2f);
-        label.Size = new Vector2(62f, 24f);
+        float labelHeight = blockContributionFontSize + 8f;
+        label.Size = new Vector2(76f, labelHeight);
+        if (block is not null)
+        {
+            if (!ReferenceEquals(label.GetParent(), block))
+                label.Reparent(block, keepGlobalTransform: false);
+            label.Position = new Vector2(-label.Size.X - 2f, (block.Size.Y - labelHeight) * 0.5f);
+        }
+        else
+        {
+            if (!ReferenceEquals(label.GetParent(), healthBar))
+                label.Reparent(healthBar, keepGlobalTransform: false);
+            label.Position = new Vector2(-label.Size.X - 2f, 0f);
+        }
         label.Visible = sharedBlock > 0;
+    }
+
+    private static int GetHpFontSize(NHealthBar healthBar)
+    {
+        if (HealthBarHpLabel.GetValue(healthBar) is Control hpText)
+            return Math.Max(1, hpText.GetThemeFontSize("font_size"));
+        return 18;
     }
 
     private static void HideRosterHealthBar(NMultiplayerPlayerState __instance)
     {
         if (RosterHealthBar.GetValue(__instance) is NHealthBar healthBar)
-            healthBar.Visible = false;
+            healthBar.Visible = !ModConfig.ShareHp && !ModConfig.ShareBlock;
     }
 
     private static void IntentVisualsPostfix(NIntent __instance)
@@ -213,23 +244,54 @@ internal static class UiPatches
             return;
 
         List<Creature> targets = targetEnumerable.ToList();
-        if (!targets.Any(SharedVitals.IsSharedPlayer))
+        if (!targets.Any(SharedVitals.IsSharedHpPlayer))
             return;
 
-        // AttackIntent resolves its preview against the local player. Calling it
-        // once for every target repeats that same preview and makes an all-player
-        // intent look multiplied by the party size. Derive the total from exactly
-        // one finalized per-hit value so the label can never disagree with itself.
-        long perHit = attack.GetSingleDamage(targets, owner);
+        var breakdown = new List<(Creature Target, long PerHit)>();
+        try
+        {
+            IRunState runState = IRunState.GetFrom(targets);
+            foreach (Creature target in targets.Where(SharedVitals.IsSharedHpPlayer))
+            {
+                if (breakdown.Any(item => ReferenceEquals(item.Target, target)))
+                    continue;
+
+                decimal modified = Hook.ModifyDamage(
+                    runState,
+                    target.CombatState,
+                    target,
+                    owner,
+                    attack.DamageCalc?.Invoke() ?? 0m,
+                    // AttackIntent.GetSingleDamage uses this exact ValueProp value in v0.111.0.
+                    (ValueProp)8,
+                    null,
+                    null,
+                    ModifyDamageHookType.All,
+                    CardPreviewMode.None,
+                    out IEnumerable<AbstractModel> _);
+                long targetPerHit = decimal.ToInt64(decimal.Truncate(
+                    Math.Clamp(modified, 0m, 999_999_999m)));
+                breakdown.Add((target, targetPerHit));
+            }
+        }
+        catch (Exception ex)
+        {
+            GD.PrintErr($"[ShareEverything] Could not calculate party-wide intent preview: {ex.Message}");
+            return;
+        }
+
+        long combinedPerHit = SaturatingSum(breakdown.Select(item => item.PerHit));
         int repeats = Math.Max(1, attack.Repeats);
-        long total = SaturatingMultiply(perHit, repeats);
+        long total = SaturatingMultiply(combinedPerHit, repeats);
 
         if (IntentValueLabelField.GetValue(__instance) is MegaRichTextLabel label)
-            label.Text = FormatIntentLabel(repeats, perHit);
+            label.Text = FormatIntentLabel(repeats, combinedPerHit);
 
+        string details = string.Join("\n", breakdown.Select(item =>
+            $"{item.Target.Name}: {FormatIntentLabel(repeats, item.PerHit)}"));
         string hpShareTooltip = IsJapanese()
-            ? $"予定ダメージ: {total}"
-            : $"Projected damage: {total}";
+            ? $"全プレイヤーの合計予定ダメージ: {total}\n{details}"
+            : $"Total projected damage to all players: {total}\n{details}";
         __instance.TooltipText = string.IsNullOrWhiteSpace(baseTooltip)
             ? hpShareTooltip
             : $"{baseTooltip}\n{hpShareTooltip}";
@@ -265,6 +327,18 @@ internal static class UiPatches
         if (value <= 0 || multiplier <= 0)
             return 0;
         return value > long.MaxValue / multiplier ? long.MaxValue : value * multiplier;
+    }
+
+    private static long SaturatingSum(IEnumerable<long> values)
+    {
+        long total = 0;
+        foreach (long value in values)
+        {
+            if (value <= 0)
+                continue;
+            total = value > long.MaxValue - total ? long.MaxValue : total + value;
+        }
+        return total;
     }
 
     private sealed class IntentTooltipState
